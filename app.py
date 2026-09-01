@@ -298,7 +298,6 @@ elif page == "Batch Asset ID Lookup & Sort":
     else:
       st.warning("Please paste at least one Asset ID.")
 
-
 # ==========================================
 # PAGE 3: MAP AREA SEARCH (VIEWPORT FILTER)
 # ==========================================
@@ -309,22 +308,17 @@ elif page == "Map Area Search":
       " **Find Assets in Current Map View** to list all assets in that window."
   )
 
-  # Initialize session state for bounds with default Arizona view if not set
+  # Initialize session state bounds as None so it doesn't default to the whole state
   if "map_bounds" not in st.session_state:
-    st.session_state.map_bounds = {
-        "min_lat": 31.33,
-        "max_lat": 37.00,
-        "min_lon": -114.82,
-        "max_lon": -109.04,
-    }
+    st.session_state.map_bounds = None
 
   # Render interactive Folium Map centered on Arizona
   m = folium.Map(location=[34.0489, -111.0937], zoom_start=7)
 
-  # Capture map bounds interaction state using streamlit-folium with a unique key
+  # Capture map bounds interaction state using streamlit-folium
   map_data = st_folium(m, width=700, height=500, key="az_map_view")
 
-  # Continuously update session state bounds when the map is moved/zoomed
+  # Capture the map coordinates when user interacts with the map
   if map_data and isinstance(map_data, dict):
     bounds = map_data.get("bounds")
     center = map_data.get("center")
@@ -375,96 +369,104 @@ elif page == "Map Area Search":
     except Exception:
       pass
 
-  # Button to trigger the viewport query using saved session state
+  # Button to trigger the viewport query
   if st.button("Find Assets in Current Map View"):
-    b = st.session_state.map_bounds
-    min_lat, max_lat, min_lon, max_lon = (
-        b["min_lat"],
-        b["max_lat"],
-        b["min_lon"],
-        b["max_lon"],
-    )
-
-    # Filter master dataset strictly based on the current map window bounds
-    map_filtered_df = df[
-        (df["Lat"] >= min_lat)
-        & (df["Lat"] <= max_lat)
-        & (df["Long"] >= min_lon)
-        & (df["Long"] <= max_lon)
-    ].copy()
-
-    if len(map_filtered_df) > 0:
-      # Generate links
-      map_filtered_df["FIS Link"] = map_filtered_df["Asset Id"].apply(
-          lambda x: (
-              f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
-          )
-      )
-      map_filtered_df["Google Street View"] = map_filtered_df.apply(
-          lambda row: (
-              f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
-              if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-              else None
-          ),
-          axis=1,
-      )
-      map_filtered_df["Google Map Pin"] = map_filtered_df.apply(
-          lambda row: (
-              f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
-              if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-              else None
-          ),
-          axis=1,
+    if st.session_state.map_bounds is not None:
+      b = st.session_state.map_bounds
+      min_lat, max_lat, min_lon, max_lon = (
+          b["min_lat"],
+          b["max_lat"],
+          b["min_lon"],
+          b["max_lon"],
       )
 
-      display_columns = {
-          "Asset Id": "Asset ID",
-          "Feature": "Feature",
-          "Sub-Feature": "Sub Feature",
-          "Route": "Route",
-          "Direction": "Direction",
-          "From MP/Offset": "From MP",
-          "To MP/Offset": "To MP",
-          "Org": "Org",
-          "FIS Link": "FIS Link",
-          "Google Street View": "Google Street View",
-          "Google Map Pin": "Google Map Pin",
-      }
+      # Filter master dataset strictly based on the current map window bounds
+      map_filtered_df = df[
+          (df["Lat"] >= min_lat)
+          & (df["Lat"] <= max_lat)
+          & (df["Long"] >= min_lon)
+          & (df["Long"] <= max_lon)
+      ].copy()
 
-      valid_cols = [
-          col for col in display_columns.keys() if col in map_filtered_df.columns
-      ]
-      display_map_df = map_filtered_df[valid_cols].rename(
-          columns=display_columns
-      )
+      if len(map_filtered_df) > 0:
+        # Generate links
+        map_filtered_df["FIS Link"] = map_filtered_df["Asset Id"].apply(
+            lambda x: (
+                f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
+            )
+        )
+        map_filtered_df["Google Street View"] = map_filtered_df.apply(
+            lambda row: (
+                f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
+                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
+                else None
+            ),
+            axis=1,
+        )
+        map_filtered_df["Google Map Pin"] = map_filtered_df.apply(
+            lambda row: (
+                f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
+                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
+                else None
+            ),
+            axis=1,
+        )
 
-      st.success(f"Found {len(display_map_df):,} assets in this map view.")
+        display_columns = {
+            "Asset Id": "Asset ID",
+            "Feature": "Feature",
+            "Sub-Feature": "Sub Feature",
+            "Route": "Route",
+            "Direction": "Direction",
+            "From MP/Offset": "From MP",
+            "To MP/Offset": "To MP",
+            "Org": "Org",
+            "FIS Link": "FIS Link",
+            "Google Street View": "Google Street View",
+            "Google Map Pin": "Google Map Pin",
+        }
 
-      st.dataframe(
-          display_map_df,
-          use_container_width=True,
-          column_config={
-              "FIS Link": st.column_config.LinkColumn(
-                  "FIS Link", display_text="Open FIS"
-              ),
-              "Google Street View": st.column_config.LinkColumn(
-                  "Google Street View", display_text="Open Street View"
-              ),
-              "Google Map Pin": st.column_config.LinkColumn(
-                  "Google Map Pin", display_text="Open Map Pin"
-              ),
-          },
-      )
+        valid_cols = [
+            col
+            for col in display_columns.keys()
+            if col in map_filtered_df.columns
+        ]
+        display_map_df = map_filtered_df[valid_cols].rename(
+            columns=display_columns
+        )
 
-      map_csv = map_filtered_df.to_csv(index=False).encode("utf-8")
-      st.download_button(
-          label="Download Map View Results as CSV",
-          data=map_csv,
-          file_name="map_view_drainage_assets.csv",
-          mime="text/csv",
-      )
+        st.success(f"Found {len(display_map_df):,} assets in this map view.")
+
+        st.dataframe(
+            display_map_df,
+            use_container_width=True,
+            column_config={
+                "FIS Link": st.column_config.LinkColumn(
+                    "FIS Link", display_text="Open FIS"
+                ),
+                "Google Street View": st.column_config.LinkColumn(
+                    "Google Street View", display_text="Open Street View"
+                ),
+                "Google Map Pin": st.column_config.LinkColumn(
+                    "Google Map Pin", display_text="Open Map Pin"
+                ),
+            },
+        )
+
+        map_csv = map_filtered_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Map View Results as CSV",
+            data=map_csv,
+            file_name="map_view_drainage_assets.csv",
+            mime="text/csv",
+        )
+      else:
+        st.warning(
+            "No assets found within this specific map view window. Try zooming"
+            " into a dense highway corridor."
+        )
     else:
       st.warning(
-          "No assets found within this specific map view window. Try zooming"
-          " into a dense highway corridor."
+          "Please zoom or pan the map slightly to target your area, then click"
+          " search."
       )
