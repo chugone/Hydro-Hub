@@ -310,12 +310,10 @@ elif page == "Map Area Search":
       "to plot them on the map and generate a list below."
   )
 
-  # 1. Initialize two sets of memory: 
-  # 'render' for drawing the map, and 'live' for tracking user drags in the background
+  # 1. Initialize memory
   if "render_center" not in st.session_state:
     st.session_state.render_center = [34.0489, -111.0937]
     st.session_state.render_zoom = 7
-
   if "live_center" not in st.session_state:
     st.session_state.live_center = [34.0489, -111.0937]
   if "live_zoom" not in st.session_state:
@@ -325,15 +323,17 @@ elif page == "Map Area Search":
         "min_lat": 31.33, "max_lat": 37.00,
         "min_lon": -114.82, "max_lon": -109.04
     }
-  
   if "map_assets" not in st.session_state:
     st.session_state.map_assets = pd.DataFrame()
+  if "show_request_form" not in st.session_state:
+    st.session_state.show_request_form = False
 
-  # 2. ALWAYS draw the map using the static 'render' coordinates so it doesn't rubber-band
+  # 2. Draw map
   m = folium.Map(location=st.session_state.render_center, zoom_start=st.session_state.render_zoom)
 
-  # 3. Add pins to the map if a search has been executed
+  # 3. Add pins
   if not st.session_state.map_assets.empty:
+    from folium.plugins import MarkerCluster
     marker_cluster = MarkerCluster().add_to(m)
     plot_df = st.session_state.map_assets.head(3000)
     for _, row in plot_df.iterrows():
@@ -347,10 +347,10 @@ elif page == "Map Area Search":
             tooltip=f"Asset ID: {row.get('Asset Id', 'N/A')}"
         ).add_to(marker_cluster)
 
-  # 4. Display the map on the webpage
+  # 4. Display map
   map_data = st_folium(m, width=800, height=500, key="az_map_view", returned_objects=["bounds", "center", "zoom"])
 
-  # 5. Silently track the LIVE position in the background as the user drags (without redrawing)
+  # 5. Track live position
   if map_data:
     if map_data.get("center"):
       st.session_state.live_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
@@ -375,11 +375,11 @@ elif page == "Map Area Search":
       except Exception:
         pass
 
-  # 6. Button Logic: Only update the map and redraw when they click this button!
+  # 6. Button Logic for searching
   if st.button("Find Assets in Current Map View"):
+    st.session_state.show_request_form = False # Hide form on new search
     b = st.session_state.live_bounds
     
-    # Filter using the background live tracker
     map_filtered_df = df[
         (df["Lat"] >= b["min_lat"]) & (df["Lat"] <= b["max_lat"]) &
         (df["Long"] >= b["min_lon"]) & (df["Long"] <= b["max_lon"])
@@ -387,17 +387,19 @@ elif page == "Map Area Search":
 
     if len(map_filtered_df) > 0:
       st.session_state.map_assets = map_filtered_df
-      # Lock in the new static center/zoom to exactly where they just clicked
       st.session_state.render_center = st.session_state.live_center
       st.session_state.render_zoom = st.session_state.live_zoom
-      st.rerun() # Force the map to redraw with pins
+      st.rerun() 
     else:
       st.session_state.map_assets = pd.DataFrame()
       st.warning("No assets found within this specific map view window.")
 
-  # 7. Render the data table and download buttons below the map
+  # 7. Render Interactive Data Table and Service Request Form
   if not st.session_state.map_assets.empty:
     display_map_df = st.session_state.map_assets.copy()
+
+    # Add a blank boolean column at the front for checkboxes
+    display_map_df.insert(0, "Select", False)
 
     display_map_df["FIS Link"] = display_map_df["Asset Id"].apply(
         lambda x: f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
@@ -412,7 +414,7 @@ elif page == "Map Area Search":
     )
 
     display_columns = {
-        "Asset Id": "Asset ID", "Feature": "Feature", "Sub-Feature": "Sub Feature",
+        "Select": "Select", "Asset Id": "Asset ID", "Feature": "Feature", "Sub-Feature": "Sub Feature",
         "Route": "Route", "Direction": "Direction", "From MP/Offset": "From MP",
         "To MP/Offset": "To MP", "Org": "Org", "FIS Link": "FIS Link",
         "Google Street View": "Google Street View", "Google Map Pin": "Google Map Pin"
@@ -423,19 +425,86 @@ elif page == "Map Area Search":
 
     st.success(f"Found {len(final_df):,} assets in this map view.")
     
-    if len(final_df) > 3000:
-        st.info("Note: To keep the map running smoothly, only the first 3,000 pins are shown on the map above, but **all** assets are listed in the table and download file below.")
+    # Disable all columns from editing EXCEPT the "Select" checkbox column
+    disabled_columns = [col for col in final_df.columns if col != "Select"]
 
-    st.dataframe(
+    # Use st.data_editor instead of st.dataframe so users can check boxes
+    edited_df = st.data_editor(
         final_df,
         use_container_width=True,
+        hide_index=True,
+        disabled=disabled_columns,
         column_config={
+            "Select": st.column_config.CheckboxColumn("Select", help="Check to request service", default=False),
             "FIS Link": st.column_config.LinkColumn("FIS Link", display_text="Open FIS"),
             "Google Street View": st.column_config.LinkColumn("Google Street View", display_text="Open Street View"),
             "Google Map Pin": st.column_config.LinkColumn("Google Map Pin", display_text="Open Map Pin"),
         },
     )
 
+    # Filter down to only the rows the user checked
+    selected_assets = edited_df[edited_df["Select"] == True]
+
+    # If any assets are checked, show the Request button
+    if len(selected_assets) > 0:
+      st.markdown("---")
+      if st.button(f"Request Services on {len(selected_assets)} Selected Assets", type="primary"):
+        st.session_state.show_request_form = True
+
+    # Show the form if the button was clicked
+    if st.session_state.show_request_form:
+      with st.form("service_request_form"):
+        st.subheader("Submit Service Request")
+        req_name = st.text_input("Requester's Name")
+        req_email = st.text_input("Requester's Email")
+        req_unit = st.text_input("Requester's Unit")
+        req_notes = st.text_area("Notes")
+        
+        submitted = st.form_submit_button("Send Email Request")
+        
+        if submitted:
+          if not req_name or not req_email:
+            st.error("Please provide at least your Name and Email.")
+          else:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+
+            # Build the email body
+            body = f"Requester Name: {req_name}\n"
+            body += f"Requester Email: {req_email}\n"
+            body += f"Requester Unit: {req_unit}\n\n"
+            body += f"Notes:\n{req_notes}\n\n"
+            body += "--- Selected Assets ---\n"
+            
+            for _, row in selected_assets.iterrows():
+              body += f"Asset ID: {row['Asset ID']} | Route: {row['Route']} {row['Direction']} | MP: {row['From MP']} | Feature: {row['Feature']}\n"
+
+            # Prepare the email headers
+            msg = MIMEMultipart()
+            # Fetch login credentials from Streamlit Secrets
+            sender_email = st.secrets["EMAIL_USER"]
+            sender_password = st.secrets["EMAIL_PASS"]
+            
+            msg['From'] = sender_email
+            msg['To'] = "ErikFurlong@Yahoo.com"
+            msg['Subject'] = f"Alert New Service Request From {req_name}"
+            msg.attach(MIMEText(body, 'plain'))
+
+            try:
+              # Connect to Gmail's server and send
+              server = smtplib.SMTP('smtp.gmail.com', 587)
+              server.starttls()
+              server.login(sender_email, sender_password)
+              server.send_message(msg)
+              server.quit()
+              
+              st.success("Your service request has been sent successfully!")
+              st.session_state.show_request_form = False # Hide the form after sending
+            except Exception as e:
+              st.error(f"Failed to send email. Please check your Streamlit Secrets configuration. Error: {e}")
+
+    st.markdown("---")
     map_csv = st.session_state.map_assets.to_csv(index=False).encode("utf-8")
     st.download_button(
         label="Download Map View Results as CSV",
