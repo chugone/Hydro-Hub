@@ -1,4 +1,5 @@
 import folium
+from folium.plugins import MarkerCluster
 import os
 import pandas as pd
 import streamlit as st
@@ -298,175 +299,140 @@ elif page == "Batch Asset ID Lookup & Sort":
     else:
       st.warning("Please paste at least one Asset ID.")
 
+
 # ==========================================
 # PAGE 3: MAP AREA SEARCH (VIEWPORT FILTER)
 # ==========================================
 elif page == "Map Area Search":
   st.title("Map Area Search")
   st.markdown(
-      "Pan and zoom the map to your target location in Arizona, then click"
-      " **Find Assets in Current Map View** to list all assets in that window."
+      "Zoom into your target area on the map, then click **Find Assets in Current Map View** "
+      "to plot them on the map and generate a list below."
   )
 
-  # Initialize session state bounds as None so it doesn't default to the whole state
+  # 1. Initialize session memory so map doesn't reset position when button is clicked
+  if "map_center" not in st.session_state:
+    st.session_state.map_center = [34.0489, -111.0937]
+  if "map_zoom" not in st.session_state:
+    st.session_state.map_zoom = 7
   if "map_bounds" not in st.session_state:
-    st.session_state.map_bounds = None
+    # Default initial bounding box over Arizona so search works instantly
+    st.session_state.map_bounds = {
+        "min_lat": 31.33, "max_lat": 37.00,
+        "min_lon": -114.82, "max_lon": -109.04
+    }
+  if "map_assets" not in st.session_state:
+    st.session_state.map_assets = pd.DataFrame()
 
-  # Render interactive Folium Map centered on Arizona
-  m = folium.Map(location=[34.0489, -111.0937], zoom_start=7)
+  # 2. Render the interactive map retaining the last known zoom and center
+  m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom)
 
-  # Capture map bounds interaction state using streamlit-folium
-  map_data = st_folium(m, width=700, height=500, key="az_map_view")
+  # 3. If there is a successful search in memory, plot the pins!
+  if not st.session_state.map_assets.empty:
+    # Use MarkerCluster to prevent the browser from freezing if there are thousands of pins
+    marker_cluster = MarkerCluster().add_to(m)
+    
+    # Cap the map pins at 3000 to maintain smooth performance (all are still in the table)
+    plot_df = st.session_state.map_assets.head(3000)
+    for _, row in plot_df.iterrows():
+      if pd.notnull(row["Lat"]) and pd.notnull(row["Long"]):
+        folium.CircleMarker(
+            location=[row["Lat"], row["Long"]],
+            radius=4,
+            color="blue",
+            fill=True,
+            fill_color="blue",
+            tooltip=f"Asset ID: {row.get('Asset Id', 'N/A')}"
+        ).add_to(marker_cluster)
 
-  # Capture the map coordinates when user interacts with the map
-  if map_data and isinstance(map_data, dict):
-    bounds = map_data.get("bounds")
-    center = map_data.get("center")
-    zoom = map_data.get("zoom", 7)
+  # 4. Display the map on the webpage
+  map_data = st_folium(m, width=800, height=500, key="az_map_view", returned_objects=["bounds", "center", "zoom"])
 
-    try:
-      if bounds is not None:
-        if isinstance(bounds, dict):
-          if "_sw" in bounds:
-            st.session_state.map_bounds = {
-                "min_lat": bounds["_sw"]["lat"],
-                "max_lat": bounds["_ne"]["lat"],
-                "min_lon": bounds["_sw"]["lng"],
-                "max_lon": bounds["_ne"]["lng"],
-            }
-          elif "sw" in bounds:
-            st.session_state.map_bounds = {
-                "min_lat": bounds["sw"][0],
-                "max_lat": bounds["ne"][0],
-                "min_lon": bounds["sw"][1],
-                "max_lon": bounds["ne"][1],
-            }
-          else:
-            keys = list(bounds.keys())
-            st.session_state.map_bounds = {
-                "min_lat": bounds[keys[0]][0],
-                "max_lat": bounds[keys[1]][0],
-                "min_lon": bounds[keys[0]][1],
-                "max_lon": bounds[keys[1]][1],
-            }
-        elif isinstance(bounds, list):
+  # 5. Silently update session memory when user interacts with the map
+  if map_data:
+    if map_data.get("center"):
+      st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
+    if map_data.get("zoom"):
+      st.session_state.map_zoom = map_data["zoom"]
+    if map_data.get("bounds"):
+      b = map_data["bounds"]
+      try:
+        if "_sw" in b:
           st.session_state.map_bounds = {
-              "min_lat": bounds[0][0],
-              "max_lat": bounds[1][0],
-              "min_lon": bounds[0][1],
-              "max_lon": bounds[1][1],
+              "min_lat": b["_sw"]["lat"], "max_lat": b["_ne"]["lat"],
+              "min_lon": b["_sw"]["lng"], "max_lon": b["_ne"]["lng"]
           }
-      elif center is not None:
-        lat = center.get("lat", 34.0489)
-        lon = center.get("lng", -111.0937)
-        delta = 360 / (2 ** min(zoom, 18)) * 1.5
-        st.session_state.map_bounds = {
-            "min_lat": lat - delta,
-            "max_lat": lat + delta,
-            "min_lon": lon - delta,
-            "max_lon": lon + delta,
-        }
-    except Exception:
-      pass
+        elif "sw" in b:
+          st.session_state.map_bounds = {
+              "min_lat": b["sw"][0], "max_lat": b["ne"][0],
+              "min_lon": b["sw"][1], "max_lon": b["ne"][1]
+          }
+      except Exception:
+        pass
 
-  # Button to trigger the viewport query
+  # 6. Button logic: Filter the data and trigger map redraw
   if st.button("Find Assets in Current Map View"):
-    if st.session_state.map_bounds is not None:
-      b = st.session_state.map_bounds
-      min_lat, max_lat, min_lon, max_lon = (
-          b["min_lat"],
-          b["max_lat"],
-          b["min_lon"],
-          b["max_lon"],
-      )
+    b = st.session_state.map_bounds
+    
+    # Filter the master sheet down to just the map box
+    map_filtered_df = df[
+        (df["Lat"] >= b["min_lat"]) & (df["Lat"] <= b["max_lat"]) &
+        (df["Long"] >= b["min_lon"]) & (df["Long"] <= b["max_lon"])
+    ].copy()
 
-      # Filter master dataset strictly based on the current map window bounds
-      map_filtered_df = df[
-          (df["Lat"] >= min_lat)
-          & (df["Lat"] <= max_lat)
-          & (df["Long"] >= min_lon)
-          & (df["Long"] <= max_lon)
-      ].copy()
-
-      if len(map_filtered_df) > 0:
-        # Generate links
-        map_filtered_df["FIS Link"] = map_filtered_df["Asset Id"].apply(
-            lambda x: (
-                f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
-            )
-        )
-        map_filtered_df["Google Street View"] = map_filtered_df.apply(
-            lambda row: (
-                f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
-                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-                else None
-            ),
-            axis=1,
-        )
-        map_filtered_df["Google Map Pin"] = map_filtered_df.apply(
-            lambda row: (
-                f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
-                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-                else None
-            ),
-            axis=1,
-        )
-
-        display_columns = {
-            "Asset Id": "Asset ID",
-            "Feature": "Feature",
-            "Sub-Feature": "Sub Feature",
-            "Route": "Route",
-            "Direction": "Direction",
-            "From MP/Offset": "From MP",
-            "To MP/Offset": "To MP",
-            "Org": "Org",
-            "FIS Link": "FIS Link",
-            "Google Street View": "Google Street View",
-            "Google Map Pin": "Google Map Pin",
-        }
-
-        valid_cols = [
-            col
-            for col in display_columns.keys()
-            if col in map_filtered_df.columns
-        ]
-        display_map_df = map_filtered_df[valid_cols].rename(
-            columns=display_columns
-        )
-
-        st.success(f"Found {len(display_map_df):,} assets in this map view.")
-
-        st.dataframe(
-            display_map_df,
-            use_container_width=True,
-            column_config={
-                "FIS Link": st.column_config.LinkColumn(
-                    "FIS Link", display_text="Open FIS"
-                ),
-                "Google Street View": st.column_config.LinkColumn(
-                    "Google Street View", display_text="Open Street View"
-                ),
-                "Google Map Pin": st.column_config.LinkColumn(
-                    "Google Map Pin", display_text="Open Map Pin"
-                ),
-            },
-        )
-
-        map_csv = map_filtered_df.to_csv(index=False).encode("utf-8")
-        st.download_button(
-            label="Download Map View Results as CSV",
-            data=map_csv,
-            file_name="map_view_drainage_assets.csv",
-            mime="text/csv",
-        )
-      else:
-        st.warning(
-            "No assets found within this specific map view window. Try zooming"
-            " into a dense highway corridor."
-        )
+    if len(map_filtered_df) > 0:
+      st.session_state.map_assets = map_filtered_df
+      st.rerun()  # Forces Streamlit to instantly redraw the map above with the new pins
     else:
-      st.warning(
-          "Please zoom or pan the map slightly to target your area, then click"
-          " search."
-      )
+      st.session_state.map_assets = pd.DataFrame() # Clear old pins
+      st.warning("No assets found within this specific map view window.")
+
+  # 7. Render the data table and download buttons below the map
+  if not st.session_state.map_assets.empty:
+    display_map_df = st.session_state.map_assets.copy()
+
+    # Generate functional links
+    display_map_df["FIS Link"] = display_map_df["Asset Id"].apply(
+        lambda x: f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
+    )
+    display_map_df["Google Street View"] = display_map_df.apply(
+        lambda row: (f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
+                     if pd.notnull(row["Lat"]) and pd.notnull(row["Long"]) else None), axis=1
+    )
+    display_map_df["Google Map Pin"] = display_map_df.apply(
+        lambda row: (f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
+                     if pd.notnull(row["Lat"]) and pd.notnull(row["Long"]) else None), axis=1
+    )
+
+    display_columns = {
+        "Asset Id": "Asset ID", "Feature": "Feature", "Sub-Feature": "Sub Feature",
+        "Route": "Route", "Direction": "Direction", "From MP/Offset": "From MP",
+        "To MP/Offset": "To MP", "Org": "Org", "FIS Link": "FIS Link",
+        "Google Street View": "Google Street View", "Google Map Pin": "Google Map Pin"
+    }
+
+    valid_cols = [col for col in display_columns.keys() if col in display_map_df.columns]
+    final_df = display_map_df[valid_cols].rename(columns=display_columns)
+
+    st.success(f"Found {len(final_df):,} assets in this map view.")
+    
+    if len(final_df) > 3000:
+        st.info("Note: To keep the map running smoothly, only the first 3,000 pins are shown on the map above, but **all** assets are listed in the table and download file below.")
+
+    st.dataframe(
+        final_df,
+        use_container_width=True,
+        column_config={
+            "FIS Link": st.column_config.LinkColumn("FIS Link", display_text="Open FIS"),
+            "Google Street View": st.column_config.LinkColumn("Google Street View", display_text="Open Street View"),
+            "Google Map Pin": st.column_config.LinkColumn("Google Map Pin", display_text="Open Map Pin"),
+        },
+    )
+
+    map_csv = st.session_state.map_assets.to_csv(index=False).encode("utf-8")
+    st.download_button(
+        label="Download Map View Results as CSV",
+        data=map_csv,
+        file_name="map_view_drainage_assets.csv",
+        mime="text/csv",
+    )
