@@ -317,133 +317,132 @@ elif page == "Map Area Search":
 
   # Button to trigger the viewport query
   if st.button("Find Assets in Current Map View"):
-    if (
-        map_data
-        and isinstance(map_data, dict)
-        and "bounds" in map_data
-        and map_data["bounds"] is not None
-    ):
-      bounds = map_data["bounds"]
-      min_lat, max_lat, min_lon, max_lon = None, None, None, None
+    min_lat, max_lat, min_lon, max_lon = None, None, None, None
+
+    if map_data and isinstance(map_data, dict):
+      bounds = map_data.get("bounds")
+      center = map_data.get("center")
+      zoom = map_data.get("zoom", 7)
 
       try:
-        if isinstance(bounds, dict):
-          if "_sw" in bounds:
-            min_lat, max_lat = bounds["_sw"]["lat"], bounds["_ne"]["lat"]
-            min_lon, max_lon = bounds["_sw"]["lng"], bounds["_ne"]["lng"]
-          elif "sw" in bounds:
-            min_lat, max_lat = bounds["sw"][0], bounds["ne"][0]
-            min_lon, max_lon = bounds["sw"][1], bounds["ne"][1]
-          else:
-            keys = list(bounds.keys())
-            min_lat, min_lon = bounds[keys[0]][0], bounds[keys[0]][1]
-            max_lat, max_lon = bounds[keys[1]][0], bounds[keys[1]][1]
-        elif isinstance(bounds, list):
-          min_lat, min_lon = bounds[0][0], bounds[0][1]
-          max_lat, max_lon = bounds[1][0], bounds[1][1]
+        if bounds is not None:
+          if isinstance(bounds, dict):
+            if "_sw" in bounds:
+              min_lat, max_lat = bounds["_sw"]["lat"], bounds["_ne"]["lat"]
+              min_lon, max_lon = bounds["_sw"]["lng"], bounds["_ne"]["lng"]
+            elif "sw" in bounds:
+              min_lat, max_lat = bounds["sw"][0], bounds["ne"][0]
+              min_lon, max_lon = bounds["sw"][1], bounds["ne"][1]
+            else:
+              keys = list(bounds.keys())
+              min_lat, min_lon = bounds[keys[0]][0], bounds[keys[0]][1]
+              max_lat, max_lon = bounds[keys[1]][0], bounds[keys[1]][1]
+          elif isinstance(bounds, list):
+            min_lat, min_lon = bounds[0][0], bounds[0][1]
+            max_lat, max_lon = bounds[1][0], bounds[1][1]
+        elif center is not None:
+          # Dynamically calculate window box based on current map center and zoom level
+          lat = center.get("lat", 34.0489)
+          lon = center.get("lng", -111.0937)
+          delta = 360 / (2 ** min(zoom, 18)) * 1.5
+          min_lat, max_lat = lat - delta, lat + delta
+          min_lon, max_lon = lon - delta, lon + delta
       except Exception:
         pass
 
-      if (
-          min_lat is not None
-          and max_lat is not None
-          and min_lon is not None
-          and max_lon is not None
-      ):
-        # Filter master dataset strictly based on the current map window bounds
-        map_filtered_df = df[
-            (df["Lat"] >= min_lat)
-            & (df["Lat"] <= max_lat)
-            & (df["Long"] >= min_lon)
-            & (df["Long"] <= max_lon)
-        ].copy()
+    if (
+        min_lat is not None
+        and max_lat is not None
+        and min_lon is not None
+        and max_lon is not None
+    ):
+      # Filter master dataset strictly based on the calculated viewport window
+      map_filtered_df = df[
+          (df["Lat"] >= min_lat)
+          & (df["Lat"] <= max_lat)
+          & (df["Long"] >= min_lon)
+          & (df["Long"] <= max_lon)
+      ].copy()
 
-        if len(map_filtered_df) > 0:
-          # Generate links
-          map_filtered_df["FIS Link"] = map_filtered_df["Asset Id"].apply(
-              lambda x: (
-                  f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
-              )
-          )
-          map_filtered_df["Google Street View"] = map_filtered_df.apply(
-              lambda row: (
-                  f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
-                  if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-                  else None
-              ),
-              axis=1,
-          )
-          map_filtered_df["Google Map Pin"] = map_filtered_df.apply(
-              lambda row: (
-                  f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
-                  if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
-                  else None
-              ),
-              axis=1,
-          )
+      if len(map_filtered_df) > 0:
+        # Generate links
+        map_filtered_df["FIS Link"] = map_filtered_df["Asset Id"].apply(
+            lambda x: (
+                f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
+            )
+        )
+        map_filtered_df["Google Street View"] = map_filtered_df.apply(
+            lambda row: (
+                f"https://www.google.com/maps/@?api=1&map_action=pano&viewpoint={row['Lat']},{row['Long']}"
+                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
+                else None
+            ),
+            axis=1,
+        )
+        map_filtered_df["Google Map Pin"] = map_filtered_df.apply(
+            lambda row: (
+                f"https://www.google.com/maps/search/?api=1&query={row['Lat']},{row['Long']}"
+                if pd.notnull(row["Lat"]) and pd.notnull(row["Long"])
+                else None
+            ),
+            axis=1,
+        )
 
-          display_columns = {
-              "Asset Id": "Asset ID",
-              "Feature": "Feature",
-              "Sub-Feature": "Sub Feature",
-              "Route": "Route",
-              "Direction": "Direction",
-              "From MP/Offset": "From MP",
-              "To MP/Offset": "To MP",
-              "Org": "Org",
-              "FIS Link": "FIS Link",
-              "Google Street View": "Google Street View",
-              "Google Map Pin": "Google Map Pin",
-          }
+        display_columns = {
+            "Asset Id": "Asset ID",
+            "Feature": "Feature",
+            "Sub-Feature": "Sub Feature",
+            "Route": "Route",
+            "Direction": "Direction",
+            "From MP/Offset": "From MP",
+            "To MP/Offset": "To MP",
+            "Org": "Org",
+            "FIS Link": "FIS Link",
+            "Google Street View": "Google Street View",
+            "Google Map Pin": "Google Map Pin",
+        }
 
-          valid_cols = [
-              col
-              for col in display_columns.keys()
-              if col in map_filtered_df.columns
-          ]
-          display_map_df = map_filtered_df[valid_cols].rename(
-              columns=display_columns
-          )
+        valid_cols = [
+            col
+            for col in display_columns.keys()
+            if col in map_filtered_df.columns
+        ]
+        display_map_df = map_filtered_df[valid_cols].rename(
+            columns=display_columns
+        )
 
-          st.success(
-              f"Found {len(display_map_df):,} assets in this map view."
-          )
+        st.success(f"Found {len(display_map_df):,} assets in this map view.")
 
-          st.dataframe(
-              display_map_df,
-              use_container_width=True,
-              column_config={
-                  "FIS Link": st.column_config.LinkColumn(
-                      "FIS Link", display_text="Open FIS"
-                  ),
-                  "Google Street View": st.column_config.LinkColumn(
-                      "Google Street View", display_text="Open Street View"
-                  ),
-                  "Google Map Pin": st.column_config.LinkColumn(
-                      "Google Map Pin", display_text="Open Map Pin"
-                  ),
-              },
-          )
+        st.dataframe(
+            display_map_df,
+            use_container_width=True,
+            column_config={
+                "FIS Link": st.column_config.LinkColumn(
+                    "FIS Link", display_text="Open FIS"
+                ),
+                "Google Street View": st.column_config.LinkColumn(
+                    "Google Street View", display_text="Open Street View"
+                ),
+                "Google Map Pin": st.column_config.LinkColumn(
+                    "Google Map Pin", display_text="Open Map Pin"
+                ),
+            },
+        )
 
-          map_csv = map_filtered_df.to_csv(index=False).encode("utf-8")
-          st.download_button(
-              label="Download Map View Results as CSV",
-              data=map_csv,
-              file_name="map_view_drainage_assets.csv",
-              mime="text/csv",
-          )
-        else:
-          st.warning(
-              "No assets found within this specific map view window. Try"
-              " zooming into a dense highway corridor."
-          )
+        map_csv = map_filtered_df.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="Download Map View Results as CSV",
+            data=map_csv,
+            file_name="map_view_drainage_assets.csv",
+            mime="text/csv",
+        )
       else:
         st.warning(
-            "Please pan or zoom the map slightly to register your viewport"
-            " bounds, then click search again."
+            "No assets found within this specific map view window. Try zooming"
+            " into a dense highway corridor."
         )
     else:
       st.warning(
-          "Please pan or zoom the map slightly to register your viewport"
-          " bounds, then click search again."
+          "Could not read map position yet. Please pan or zoom slightly and"
+          " try again."
       )
