@@ -310,29 +310,31 @@ elif page == "Map Area Search":
       "to plot them on the map and generate a list below."
   )
 
-  # 1. Initialize session memory so map doesn't reset position when button is clicked
-  if "map_center" not in st.session_state:
-    st.session_state.map_center = [34.0489, -111.0937]
-  if "map_zoom" not in st.session_state:
-    st.session_state.map_zoom = 7
-  if "map_bounds" not in st.session_state:
-    # Default initial bounding box over Arizona so search works instantly
-    st.session_state.map_bounds = {
+  # 1. Initialize two sets of memory: 
+  # 'render' for drawing the map, and 'live' for tracking user drags in the background
+  if "render_center" not in st.session_state:
+    st.session_state.render_center = [34.0489, -111.0937]
+    st.session_state.render_zoom = 7
+
+  if "live_center" not in st.session_state:
+    st.session_state.live_center = [34.0489, -111.0937]
+  if "live_zoom" not in st.session_state:
+    st.session_state.live_zoom = 7
+  if "live_bounds" not in st.session_state:
+    st.session_state.live_bounds = {
         "min_lat": 31.33, "max_lat": 37.00,
         "min_lon": -114.82, "max_lon": -109.04
     }
+  
   if "map_assets" not in st.session_state:
     st.session_state.map_assets = pd.DataFrame()
 
-  # 2. Render the interactive map retaining the last known zoom and center
-  m = folium.Map(location=st.session_state.map_center, zoom_start=st.session_state.map_zoom)
+  # 2. ALWAYS draw the map using the static 'render' coordinates so it doesn't rubber-band
+  m = folium.Map(location=st.session_state.render_center, zoom_start=st.session_state.render_zoom)
 
-  # 3. If there is a successful search in memory, plot the pins!
+  # 3. Add pins to the map if a search has been executed
   if not st.session_state.map_assets.empty:
-    # Use MarkerCluster to prevent the browser from freezing if there are thousands of pins
     marker_cluster = MarkerCluster().add_to(m)
-    
-    # Cap the map pins at 3000 to maintain smooth performance (all are still in the table)
     plot_df = st.session_state.map_assets.head(3000)
     for _, row in plot_df.iterrows():
       if pd.notnull(row["Lat"]) and pd.notnull(row["Long"]):
@@ -348,37 +350,36 @@ elif page == "Map Area Search":
   # 4. Display the map on the webpage
   map_data = st_folium(m, width=800, height=500, key="az_map_view", returned_objects=["bounds", "center", "zoom"])
 
- # 5. Silently update session memory when user interacts with the map
+  # 5. Silently track the LIVE position in the background as the user drags (without redrawing)
   if map_data:
     if map_data.get("center"):
-      st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
+      st.session_state.live_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
     if map_data.get("zoom"):
-      st.session_state.map_zoom = map_data["zoom"]
+      st.session_state.live_zoom = map_data["zoom"]
     if map_data.get("bounds"):
       b = map_data["bounds"]
       try:
         if isinstance(b, dict):
-          # Bulletproof coordinate extractor (handles _southWest, _northEast, sw, ne, etc.)
           lats = [v["lat"] for v in b.values() if isinstance(v, dict) and "lat" in v]
           lons = [v.get("lng", v.get("lon")) for v in b.values() if isinstance(v, dict)]
-          
           if len(lats) == 2 and len(lons) == 2:
-            st.session_state.map_bounds = {
+            st.session_state.live_bounds = {
                 "min_lat": min(lats), "max_lat": max(lats),
                 "min_lon": min(lons), "max_lon": max(lons)
             }
         elif isinstance(b, list) and len(b) >= 2:
-          st.session_state.map_bounds = {
+          st.session_state.live_bounds = {
               "min_lat": min(b[0][0], b[1][0]), "max_lat": max(b[0][0], b[1][0]),
               "min_lon": min(b[0][1], b[1][1]), "max_lon": max(b[0][1], b[1][1])
           }
       except Exception:
         pass
-  # 6. Button logic: Filter the data and trigger map redraw
+
+  # 6. Button Logic: Only update the map and redraw when they click this button!
   if st.button("Find Assets in Current Map View"):
-    b = st.session_state.map_bounds
+    b = st.session_state.live_bounds
     
-    # Filter the master sheet down to just the map box
+    # Filter using the background live tracker
     map_filtered_df = df[
         (df["Lat"] >= b["min_lat"]) & (df["Lat"] <= b["max_lat"]) &
         (df["Long"] >= b["min_lon"]) & (df["Long"] <= b["max_lon"])
@@ -386,16 +387,18 @@ elif page == "Map Area Search":
 
     if len(map_filtered_df) > 0:
       st.session_state.map_assets = map_filtered_df
-      st.rerun()  # Forces Streamlit to instantly redraw the map above with the new pins
+      # Lock in the new static center/zoom to exactly where they just clicked
+      st.session_state.render_center = st.session_state.live_center
+      st.session_state.render_zoom = st.session_state.live_zoom
+      st.rerun() # Force the map to redraw with pins
     else:
-      st.session_state.map_assets = pd.DataFrame() # Clear old pins
+      st.session_state.map_assets = pd.DataFrame()
       st.warning("No assets found within this specific map view window.")
 
   # 7. Render the data table and download buttons below the map
   if not st.session_state.map_assets.empty:
     display_map_df = st.session_state.map_assets.copy()
 
-    # Generate functional links
     display_map_df["FIS Link"] = display_map_df["Asset Id"].apply(
         lambda x: f"https://fis.dot.state.az/Inventory/Asset/ReadOnly?assetId={x}"
     )
