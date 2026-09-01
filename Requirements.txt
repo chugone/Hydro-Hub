@@ -1,0 +1,6 @@
+streamlit
+pandas
+pyarrow
+gdown
+folium
+streamlit-folium
