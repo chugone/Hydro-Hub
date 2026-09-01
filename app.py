@@ -348,7 +348,7 @@ elif page == "Map Area Search":
   # 4. Display the map on the webpage
   map_data = st_folium(m, width=800, height=500, key="az_map_view", returned_objects=["bounds", "center", "zoom"])
 
-  # 5. Silently update session memory when user interacts with the map
+ # 5. Silently update session memory when user interacts with the map
   if map_data:
     if map_data.get("center"):
       st.session_state.map_center = [map_data["center"]["lat"], map_data["center"]["lng"]]
@@ -357,19 +357,23 @@ elif page == "Map Area Search":
     if map_data.get("bounds"):
       b = map_data["bounds"]
       try:
-        if "_sw" in b:
+        if isinstance(b, dict):
+          # Bulletproof coordinate extractor (handles _southWest, _northEast, sw, ne, etc.)
+          lats = [v["lat"] for v in b.values() if isinstance(v, dict) and "lat" in v]
+          lons = [v.get("lng", v.get("lon")) for v in b.values() if isinstance(v, dict)]
+          
+          if len(lats) == 2 and len(lons) == 2:
+            st.session_state.map_bounds = {
+                "min_lat": min(lats), "max_lat": max(lats),
+                "min_lon": min(lons), "max_lon": max(lons)
+            }
+        elif isinstance(b, list) and len(b) >= 2:
           st.session_state.map_bounds = {
-              "min_lat": b["_sw"]["lat"], "max_lat": b["_ne"]["lat"],
-              "min_lon": b["_sw"]["lng"], "max_lon": b["_ne"]["lng"]
-          }
-        elif "sw" in b:
-          st.session_state.map_bounds = {
-              "min_lat": b["sw"][0], "max_lat": b["ne"][0],
-              "min_lon": b["sw"][1], "max_lon": b["ne"][1]
+              "min_lat": min(b[0][0], b[1][0]), "max_lat": max(b[0][0], b[1][0]),
+              "min_lon": min(b[0][1], b[1][1]), "max_lon": max(b[0][1], b[1][1])
           }
       except Exception:
         pass
-
   # 6. Button logic: Filter the data and trigger map redraw
   if st.button("Find Assets in Current Map View"):
     b = st.session_state.map_bounds
